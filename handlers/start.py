@@ -1,3 +1,4 @@
+import logging
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message
@@ -5,6 +6,7 @@ from aiogram.fsm.context import FSMContext
 from keyboards.keyboards import get_main_menu_keyboard
 from services.prompt_engine import prompt_engine
 
+logger = logging.getLogger(__name__)
 router = Router(name="start_router")
 
 
@@ -13,6 +15,7 @@ router = Router(name="start_router")
 @router.message(Command("cancel"))
 async def command_start_handler(message: Message, state: FSMContext) -> None:
     """/start komandasi yoki bosh menyuga qaytish."""
+    logger.info(f"Yangi start/menyu buyrug'i qabul qilindi: ID={message.from_user.id} (@{message.from_user.username})")
     await state.clear()
     user_id = message.from_user.id
     user_data = prompt_engine.get_user_data(user_id)

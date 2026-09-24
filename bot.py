@@ -23,13 +23,31 @@ from aiohttp import web
 from config import BOT_TOKEN, validate_config
 from handlers import register_all_handlers
 
+from collections import deque
+import json
+
+log_buffer = deque(maxlen=100)
+
+class BufferLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            log_buffer.append(msg)
+        except Exception:
+            pass
+
+buffer_handler = BufferLogHandler()
+buffer_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+
 # Logging sozlamalari
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[logging.StreamHandler(sys.stdout), buffer_handler],
 )
 logger = logging.getLogger("PROMPT_MASTER_AI")
+
+BOT_VERSION = "v1.3-debug"
 
 
 async def start_health_server():
@@ -38,16 +56,28 @@ async def start_health_server():
     app = web.Application()
 
     async def handle_ping(request):
-        return web.Response(text="PROMPT MASTER AI Bot is healthy and running! 🚀", status=200)
+        return web.Response(
+            text=f"PROMPT MASTER AI Bot is healthy and running! 🚀 (Version: {BOT_VERSION})",
+            status=200
+        )
+
+    async def handle_debug(request):
+        data = {
+            "version": BOT_VERSION,
+            "status": "online",
+            "logs": list(log_buffer)[-50:],
+        }
+        return web.Response(text=json.dumps(data, indent=2), content_type="application/json")
 
     app.router.add_get("/", handle_ping)
     app.router.add_get("/health", handle_ping)
+    app.router.add_get("/debug", handle_debug)
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    logger.info(f"Render Health Check server ishga tushdi (Port: {port})")
+    logger.info(f"Render Health Check server ishga tushdi (Port: {port}, Version: {BOT_VERSION})")
     return runner
 
 
@@ -108,8 +138,8 @@ async def main() -> None:
     # Buyruqlar menyusini o'rnatish
     await set_default_commands(bot)
 
-    # Eski kutilmagan yangilanishlarni tozalash (drop pending updates)
-    await bot.delete_webhook(drop_pending_updates=True)
+    # Webhookni tozalash (foydalanuvchi yuborgan xabarlarni o'chirib yubormaslik)
+    await bot.delete_webhook(drop_pending_updates=False)
 
     # Render yoki bulutli server uchun health check
     health_runner = None
@@ -121,16 +151,17 @@ async def main() -> None:
     if "PORT" in os.environ or os.getenv("RENDER_EXTERNAL_URL"):
         ping_task = asyncio.create_task(keep_alive())
 
-    logger.info("Bot muvaffaqiyatli ishga tushdi va xabarlarni qabul qilishga tayyor! 🚀")
+    logger.info(f"Bot muvaffaqiyatli ishga tushdi va xabarlarni qabul qilishga tayyor! 🚀 ({BOT_VERSION})")
 
     try:
         while True:
             try:
+                logger.info("Polling boshlanmoqda...")
                 await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
-                break
+                logger.warning("Polling to'xtadi. 3 soniyada qayta ishga tushiriladi...")
             except Exception as e:
-                logger.error(f"Polling xatosi: {e}. 5 soniyadan so'ng qayta ulaniladi...")
-                await asyncio.sleep(5)
+                logger.error(f"Polling xatosi: {e}. 3 soniyadan so'ng qayta ulaniladi...")
+            await asyncio.sleep(3)
     finally:
         if ping_task:
             ping_task.cancel()
