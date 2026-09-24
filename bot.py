@@ -16,6 +16,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
+import os
+from aiohttp import web
+
 from config import BOT_TOKEN, validate_config
 from handlers import register_all_handlers
 
@@ -26,6 +29,25 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("PROMPT_MASTER_AI")
+
+
+async def start_health_server():
+    """Render yoki bulutli xizmatlar uchun HTTP health check serveri."""
+    port = int(os.getenv("PORT", 10000))
+    app = web.Application()
+
+    async def handle_ping(request):
+        return web.Response(text="PROMPT MASTER AI Bot is healthy and running! 🚀", status=200)
+
+    app.router.add_get("/", handle_ping)
+    app.router.add_get("/health", handle_ping)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    logger.info(f"Render Health Check server ishga tushdi (Port: {port})")
+    return runner
 
 
 async def set_default_commands(bot: Bot) -> None:
@@ -72,11 +94,18 @@ async def main() -> None:
     # Eski kutilmagan yangilanishlarni tozalash (drop pending updates)
     await bot.delete_webhook(drop_pending_updates=True)
 
+    # Render yoki bulutli server uchun health check
+    health_runner = None
+    if "PORT" in os.environ:
+        health_runner = await start_health_server()
+
     logger.info("Bot muvaffaqiyatli ishga tushdi va xabarlarni qabul qilishga tayyor! 🚀")
 
     try:
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
+        if health_runner:
+            await health_runner.cleanup()
         await bot.session.close()
         logger.info("Bot to'xtatildi.")
 
