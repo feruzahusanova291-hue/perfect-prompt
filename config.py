@@ -11,7 +11,7 @@ load_dotenv(dotenv_path=BASE_DIR / ".env")
 # Tokens & Keys
 BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest").strip()
 
 # Supported Platforms
 SUPPORTED_PLATFORMS = [
