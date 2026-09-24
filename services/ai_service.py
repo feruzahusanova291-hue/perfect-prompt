@@ -1,6 +1,7 @@
 import base64
 import json
 import logging
+import asyncio
 from typing import Optional, List, Dict, Any
 import aiohttp
 
@@ -83,42 +84,64 @@ class AIService:
 
         headers = {"Content-Type": "application/json"}
 
-        timeout = aiohttp.ClientTimeout(total=45)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(url, json=payload, headers=headers) as resp:
-                status = resp.status
-                text_response = await resp.text()
+        for attempt in range(1, 4):
+            try:
+                timeout = aiohttp.ClientTimeout(total=40)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.post(url, json=payload, headers=headers) as resp:
+                        status = resp.status
+                        text_response = await resp.text()
 
-                if status == 200:
-                    data = json.loads(text_response)
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        parts_resp = candidates[0].get("content", {}).get("parts", [])
-                        if parts_resp and "text" in parts_resp[0]:
-                            return parts_resp[0]["text"].strip()
-                    return "❌ Natija bo'sh qaytdi. Boshqa g'oya bilan urinib ko'ring."
+                        if status == 200:
+                            data = json.loads(text_response)
+                            candidates = data.get("candidates", [])
+                            if candidates:
+                                parts_resp = candidates[0].get("content", {}).get("parts", [])
+                                if parts_resp and "text" in parts_resp[0]:
+                                    return parts_resp[0]["text"].strip()
+                            return "❌ Natija bo'sh qaytdi. Boshqa g'oya bilan urinib ko'ring."
 
-                elif status in (400, 403):
-                    # Kalit yoki model noto'g'ri bo'lishi mumkin
-                    if "API_KEY_INVALID" in text_response or status == 403:
-                        logger.error(f"Gemini API kaliti xato: {text_response}")
-                        return "⚠️ Gemini API kaliti yaroqsiz yoki ruxsat yo'q. `.env` faylini tekshiring."
-                    
-                    # Agar model topilmasa, fallback sifatida gemini-1.5-flash ga o'tamiz
-                    if current_model != "gemini-1.5-flash":
-                        logger.warning(f"{current_model} modelida xatolik ({text_response[:100]}), gemini-1.5-flash bilan urinilmoqda...")
-                        return await self._call_gemini_rest(
-                            system_prompt, user_prompt, image_bytes, model_name="gemini-1.5-flash"
-                        )
-                    return f"⚠️ So'rovda xatolik yuz berdi (HTTP {status})."
+                        elif status == 503:
+                            logger.warning(
+                                f"Gemini API 503 (Urinish {attempt}/3): Google serveri band. "
+                                f"2 soniyadan so'ng avtomatik qayta urinilmoqda..."
+                            )
+                            if attempt < 3:
+                                await asyncio.sleep(2)
+                                continue
+                            return (
+                                "⚠️ Google AI serveri hozirda juda band (503 Service Unavailable). "
+                                "Iltimos, bir necha soniyadan so'ng '🔄 Qayta yaratish' tugmasini bosing."
+                            )
 
-                elif status == 429:
-                    logger.warning("Gemini API so'rov limiti oshdi (Rate limit / Quota exceeded).")
-                    return "⚠️ API so'rovlar limiti tugadi (Quota exceeded). Iltimos, 1-2 daqiqadan so'ng qayta urinib ko'ring."
+                        elif status in (400, 403):
+                            if "API_KEY_INVALID" in text_response or status == 403:
+                                logger.error(f"Gemini API kaliti xato: {text_response}")
+                                return "⚠️ Gemini API kaliti yaroqsiz yoki ruxsat yo'q. `.env` faylini tekshiring."
+                            return f"⚠️ So'rovda xatolik yuz berdi (HTTP {status})."
 
-                else:
-                    logger.error(f"Gemini API xatosi ({status}): {text_response}")
-                    return f"❌ Server xatosi yuz berdi (Status: {status}). Bir ozdan so'ng qayta urinib ko'ring."
+                        elif status == 429:
+                            logger.warning(f"Gemini API so'rov limiti oshdi (429, Urinish {attempt}/3).")
+                            if attempt < 3:
+                                await asyncio.sleep(3)
+                                continue
+                            return "⚠️ API so'rovlar limiti tugadi (Quota exceeded). Iltimos, 1 daqiqadan so'ng qayta urinib ko'ring."
+
+                        else:
+                            logger.error(f"Gemini API xatosi ({status}): {text_response}")
+                            if attempt < 3:
+                                await asyncio.sleep(2)
+                                continue
+                            return f"❌ Server xatosi yuz berdi (Status: {status}). Qayta urinib ko'ring."
+
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                logger.warning(f"Google API bilan ulanishda uzilish ({e}), Urinish {attempt}/3...")
+                if attempt < 3:
+                    await asyncio.sleep(2)
+                    continue
+                return "🌐 Google serveriga ulanishda vaqtinchalik uzilish yuz berdi. Qayta urinib ko'ring."
+
+        return "⚠️ Noma'lum xatolik yuz berdi. Iltimos qayta urinib ko'ring."
 
     async def generate_prompt(
         self,
