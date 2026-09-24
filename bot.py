@@ -17,6 +17,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
 
 import os
+import aiohttp
 from aiohttp import web
 
 from config import BOT_TOKEN, validate_config
@@ -48,6 +49,22 @@ async def start_health_server():
     await site.start()
     logger.info(f"Render Health Check server ishga tushdi (Port: {port})")
     return runner
+
+
+async def keep_alive():
+    """Render bepul tarifida 15 daqiqadan so'ng uxlab qolmasligi uchun self-ping vazifasi."""
+    render_url = os.getenv("RENDER_EXTERNAL_URL") or "https://perfect-prompt.onrender.com"
+    logger.info(f"Self-ping vazifasi faollashtirildi: {render_url}")
+    await asyncio.sleep(60)
+    while True:
+        try:
+            timeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.get(f"{render_url}/health") as resp:
+                    logger.info(f"Self-ping muvaffaqiyatli: HTTP {resp.status}")
+        except Exception as e:
+            logger.debug(f"Self-ping xatosi: {e}")
+        await asyncio.sleep(600)  # Har 10 daqiqada bir marta ping
 
 
 async def set_default_commands(bot: Bot) -> None:
@@ -99,11 +116,24 @@ async def main() -> None:
     if "PORT" in os.environ:
         health_runner = await start_health_server()
 
+    # Render sleep rejimiga o'tmasligi uchun self-ping vazifasi
+    ping_task = None
+    if "PORT" in os.environ or os.getenv("RENDER_EXTERNAL_URL"):
+        ping_task = asyncio.create_task(keep_alive())
+
     logger.info("Bot muvaffaqiyatli ishga tushdi va xabarlarni qabul qilishga tayyor! 🚀")
 
     try:
-        await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+        while True:
+            try:
+                await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
+                break
+            except Exception as e:
+                logger.error(f"Polling xatosi: {e}. 5 soniyadan so'ng qayta ulaniladi...")
+                await asyncio.sleep(5)
     finally:
+        if ping_task:
+            ping_task.cancel()
         if health_runner:
             await health_runner.cleanup()
         await bot.session.close()
